@@ -1,0 +1,465 @@
+ 
+---
+title: "DATA-0200 Lab 9 - RShiny, APIs and Making an App"
+author: "Kyle Monahan"
+output:
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+  always_allow_html: true
+---
+
+
+```{r setup, include=FALSE}
+if (!require("knitr")) 
+install.packages("knitr")
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, dpi = 500)
+
+# These are knitr options, which is a package in R. Echo tells us that we will receive responses when running this notebook, caches saves the objects as we run them, and dpi sets the dots per inch or resolution of our figures.
+
+```
+
+
+## Today's workshop on webscraping & APIs
+
+## What we will talk about in the future - web scraping, pulling in data from APIs
+
+
+The goals of this section are to discuss: 
+* Batch downloads of data from the web (URL) using a *web scraping* approach.
+* Organizing the data into a **tidy** data frame
+* How to count how many values (observations) we have
+
+
+```{r}
+# Load the packages, install if needed
+# install.packages("janitor")
+library(readr)        # Used for reading in data
+library(dplyr)        # A data management library
+library(ggplot2)      # Used for graphing
+library(janitor)      # Used for data cleaning
+```
+
+
+## *For* Loop to Download Files
+
+The Department for Environment, Food & Rural Affairs (DEFRA) publishes annual concentrations of pollutants for local authorities in the United Kingdom.
+
+For example, the 2010 dataset for PM 2.5 concentrations is located at https://uk-air.defra.gov.uk/datastore/pcm/popwmpm252010byUKlocalauthority.csv
+The same dataset for the year 2015 is stored at https://uk-air.defra.gov.uk/datastore/pcm/popwmpm252015byUKlocalauthority.csv
+
+A close investigation of the URLs reveals they they both follow the same format:
+https://uk-air.defra.gov.uk/datastore/pcm/popwmpm25[YEAR]byUKlocalauthority.csv
+
+Because the URLs of the each of the annual files have the same pattern we can write a *for loop* which downloads successive files, converts them into a tidy format, stacks the data and stores them in a data frame.
+
+A data frame, as we mentioned before, is just a **virtual Excel sheet**.
+
+For more information on data frames, see here: https://www.rdocumentation.org/packages/base/versions/3.6.1/topics/data.frame
+
+We can use the `DT` package to create an interactive table embedded in document which stores the data and is sortable and searchable.
+
+
+## Loops in R
+
+To do this we need to make a loop. The general syntax, or method of writing, a loop is as follows:
+
+for (value in list_of_values) {
+  do something
+}
+
+Or, in R code: 
+
+```{r}
+
+for (year in 2010:2015) { 
+  print(paste("The year is", year)) # This will print all the years from 2010 to 2015
+}
+
+```
+
+Applying this knowledge, let's say we want to extract the data from 2010 to 2015. Looking at the URL, we know that the URL only changes based on the date. So, we need to paste in the URL and the year to change the date. 
+
+We then use the pipe `%>%` to pass the data frame into four functions:
+
+* mutate()
+* select()
+* gather()
+* bind_rows()
+
+
+```{r}
+
+library(plyr)
+library(dplyr)
+df <- data.frame()
+
+for (year in 2010:2015) {
+  
+ap <- read_csv(paste0("https://uk-air.defra.gov.uk/datastore/pcm/popwmpm25", year,"byUKlocalauthority.csv"), skip = 2)
+
+ap <- ap %>% mutate(year = year) %>% dplyr::select(-`LA code`)
+ap <- ap %>% tidyr::gather(indicator, value, 1:3)
+df <- bind_rows(df, ap)
+
+}
+
+df <- janitor::clean_names(df, case = "snake") %>%
+      arrange(local_authority, indicator, year)
+
+DT::datatable(df)
+```
+
+
+We now have the data in as a data frame, `df` with 7254 observations of four variables. 
+
+
+## Grouping Variables
+
+We can also count the number of values per year using the `group_by()` function.
+
+```{r}
+df %>%
+  group_by(year) %>%
+  count()
+```
+
+
+## Create Faceted Plot
+
+Finally, we have group the data into different tables by geographic area, the year of measurement, and the air pollution indicator which is being measured. From there, in each grouped table, we can calculate the mean PM 2.5 (particulate matter of 2.5 microns), and then create a trend chart.
+
+There is a lot going on here:
+
+1. We randomly select ten (out of over 400) local authoriries to include in our plot
+2. We group the data by area, year and indicator
+3. We calculate the mean pm25 values
+4. We split the pm25 column into 3 parts
+5. And drop the year (we already have a year column)
+6. Then exclude the total values - just plot the non-anthropogenic and anthropogenic pm25 values
+7. Then create a trend chart of pm25 values over time
+8. Create a chart for each local authority
+
+Note that if we would have included all of the local authorities, our plot would have been illegible. Plus it would have taken a long time to create.
+If you wish, you can increase the amount of local autohories sampled, or even invlude all of them (by removing the filer line).
+However, make sure to adjust the figure height `fig.height` accordingly when you do so 
+
+```{r, fig.width = 10, fig.height = 20}
+df %>%
+  filter(local_authority %in% sample(unique(df$local_authority), 10)) %>%
+  dplyr::group_by(local_authority, year, indicator) %>% 
+  summarise(meanvals = mean(value, na.rm = TRUE)) %>%
+  tidyr::separate(indicator, c("pm", "year1", "type"), sep = " ") %>%
+  select(-year1) %>% 
+  filter(type != "(total)" & year > 2010) %>%
+  ggplot(aes(x = year, y = meanvals, color = type)) +
+    geom_line() +
+    facet_grid(rows = vars(local_authority))
+```
+  
+
+  
+  
+  
+# PART 3: Using an Application Program Interface (API)
+
+The goals of this section are to discuss: 
+* Accessing data via an **API**
+* How to deal with georeferenced data
+* Creating interactive maps
+
+
+```{r}
+#install.packages("request")
+# Load the packages
+library(dplyr)      # A data management library
+library(tidyr)      # Used for tidying data
+library(request)    # Used for HTTP GET requests
+library(leaflet)    # A library for interactive maps
+```
+
+
+## Using an API
+
+The Environmental Protection Agency (EPA) makes real-time, historical, and forecasted air quality data available to developers and scientists via the AirNow API. We will use this API to investigate air quality in Massachusetts during rush hour (6 - 11 am) this morning.
+
+**Before proceeding** go to https://docs.airnowapi.org/ to request an AirNow API account.
+
+We will be using the `request` library to access data through this API. This library provides a painless interface for communicating with APIs where one does not have to worry about praising URI strings and reading HTTP status codes, and extracting data from a JSON string.
+
+The API that best fits our needs is the Observations by Monitoring Site API as it allows us to specify a precise geograpical area via a bounding box.
+We will refer to the documentation of this API at https://docs.airnowapi.org/Data/docs to construct our query.
+
+There are a couple crucial things to note when constructing our query:
+1. The coordinates of the bounding box must come in a specific order (see documentation)
+2. The start and end times and dates are in UTC, not EST (or EDT)
+3. *You must use your own API key*
+
+**Before proceeding** make sure to replace 'INSERT YOUR API KEY HERE' with your own API key!
+
+```{r,error=TRUE}
+res <- api("https://airnowapi.org/aq/data") %>%
+  api_query(bbox = '-73.5,41.3,-69.9,42.8',
+            startdate = '2020-10-07T11:00',
+            enddate = '2020-10-07T16:00',
+            parameters = 'pm25',
+            datatype = 'C',
+            format = 'application/json',
+            api_key = 'F68339A8-190A-4511-BF0B-17BC700BFD8D',  # YOUR API KEY GOES HERE
+            verbose = 0,
+            nowcastonly = 0,
+            includerawconcentrations = 0) %>%
+  http()
+```
+
+>>> Take a look at the response by typing res into the console or by double-clicking on it in the environment. What type is it?
+
+
+## Formatting and Anlyzing the Response
+
+The following is good practise using varius tidyverse libraries and the pipe `%>%` operator.
+Here is what's happening:
+1. We convert the response from a list into a data frame
+2. We generate an unique ID for each location by combining the latitude and longitude
+3. We filter our the descriptive fields we are not interested in
+4. Then we group the data by location and calculate the mean pm25 value for each location
+5. Finally we extract the geographical coordinates from the location ID we generated
+
+```{r,error=TRUE}
+pmdata <- res %>%
+  ldply(data.frame) %>%
+  mutate(latlong=paste(Latitude, Longitude)) %>% 
+  separate("latlong", c("lat", "lon"), sep = " ", remove = FALSE, convert = TRUE)
+
+```
+
+
+## Mapping the Data
+
+Finally we create an interactive map of our data using Leaflet - a JavaScript library for interactive maps. However, we will not be using JavaScript.
+Leaflet, like many other popular JavaScript and Python libraries have a community-developed wrappers, allowing them to be used in R.
+
+For mor information go to https://leafletjs.com/ and https://rstudio.github.io/leaflet/
+
+
+Before we create the map, we will generate a yellow-red color scale to fit our pm25 values
+
+```{r,error=TRUE}
+pal <- colorNumeric(
+  palette = "YlOrRd",
+  domain = pmdata$value)
+```
+
+
+Creating a leaflet map is very similar to plotting with ggplot - it's all about layers.
+First we must add a basemap, and then we can add our datapoints on top.
+
+```{r,error=TRUE}
+m = leaflet(pmdata) %>%
+  addProviderTiles(providers$CartoDB.DarkMatter) %>%
+  addCircles(lng = ~lon,
+             lat = ~lat,
+             radius = 3000,
+             color = ~pal(Value),
+             popup = ~as.character(Value),
+             label = ~as.character(Value),
+             stroke = FALSE,
+             fillOpacity = 0.5)
+m
+```
+
+Feel free to play around with different basemaps:
+https://rstudio.github.io/leaflet/basemaps.html
+https://leaflet-extras.github.io/leaflet-providers/preview/
+
+You can also use an API to load an external basemap or your preference. Google Maps and Mapbox are two popular options:
+https://cloud.google.com/maps-platform/maps/
+https://docs.mapbox.com/api/maps/
+
+
+OPTIONAL: For more information on the `~` operator, check out the following:
+https://www.r-bloggers.com/the-r-formula-method-the-good-parts/
+https://www.r-bloggers.com/the-r-formula-method-the-bad-parts-2/
+
+
+# Working with IPO data
+
+We will start working with code published after the WeWork IPO, investigating the recent changes in IPO valuation over the past ten years. 
+
+This original code was written by Jonathan REgenstein, and we are just building on it: https://rviews.rstudio.com/2019/10/21/ipo-exploration/?mkt_tok=eyJpIjoiWkRkbFkyTmtPVFUyTmpNeSIsInQiOiJmV3pVVjZTRkNCSXhiSGRIWFVhTlFpVnI4ekNwV1dBQ1RjREN5TTBkTXlob05LNjBEOFlvNXVsN3FhMG1Ra3F3aFJZcEZcL0lpWGYyMG5hbDNtM25HaWlCMzBUU21cL3l5RjI4dU00ZGtlcDZ5MFVKaWQxRDVSSWZDWW00ak1SRVhZIn0%3D
+
+```{r}
+#install.packages("tidyquant")
+#install.packages("riingo")
+#install.packages("roll")
+#install.packages("tictoc")
+
+library(tidyverse)
+library(tidyquant)
+library(dplyr)
+library(plotly)
+library(riingo)
+library(roll)
+library(tictoc)
+```
+
+
+Now we need to start downloading data. We can use the tq_exchange() function to pull the ticker values.
+
+
+```{r}
+nasdaq <-
+  tq_exchange("NASDAQ")
+
+amex  <- 
+  tq_exchange("AMEX")
+
+nyse <- 
+  tq_exchange("NYSE")
+```
+
+
+Now we can bindrows() and bring that data together, thanks to the authors of tidyquant (nice!):
+
+```{r}
+company_ipo_sector <-
+  nasdaq %>% 
+  bind_rows(amex) %>% 
+  bind_rows(nyse) %>% 
+  select(symbol, company, ipo.year, sector) %>% 
+  filter(!is.na(ipo.year))
+
+
+company_ipo_sector %>% 
+  head()
+```
+
+Then we can count all the IPO values in each sector, and plot those. 
+
+```{r}
+company_ipo_sector %>% 
+  group_by(ipo.year) %>%
+  count(ipo.year) %>% 
+  tail()
+
+company_ipo_sector %>% 
+  group_by(ipo.year) %>%
+  count(ipo.year) %>% 
+  ggplot(aes(x = ipo.year, y = n)) +
+  geom_col(color = "cornflowerblue") + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 20)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+We can use `ggplotly` to gain some plotly-esque interativity, just like we did with Tableau!
+
+```{r}
+ggplotly(
+company_ipo_sector %>% 
+  group_by(ipo.year) %>%
+  count(ipo.year) %>% 
+  rename(`num IPOs` = n, year = ipo.year) %>% 
+  ggplot(aes(x = year, y = `num IPOs`)) +
+  geom_col(color = "cornflowerblue") + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 20)) +
+  theme(axis.text.x = element_text(angle = 90))
+)
+```
+
+I wonder how this would work out by sector. We can use `tidy` approaches to look at this: 
+
+```{r}
+company_ipo_sector %>% 
+  group_by(ipo.year, sector) %>% 
+  select(ipo.year, sector) %>% 
+  add_count(ipo.year, sector) %>% 
+  slice(1) %>% 
+  filter(ipo.year > 2003)
+
+company_ipo_sector %>% 
+  group_by(ipo.year) %>% 
+  filter(ipo.year > 2003 & !is.na(sector)) %>%
+  mutate(sector = str_remove(sector, "Consumer")) %>% 
+  count(sector) %>% 
+  ggplot(aes(x = sector, y = n, fill = sector)) +
+  geom_col() +
+  facet_wrap(~ipo.year) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(x = "")
+
+```
+
+It looks like Health Care and Finance are the places to have an IPO!
+
+
+```{r}
+(
+  company_ipo_sector %>% 
+  group_by(ipo.year) %>% 
+  filter(between(ipo.year, 2004, 2019) & !is.na(sector)) %>%
+  mutate(sector = str_remove(sector, "Consumer")) %>% 
+  count(sector) %>% 
+  ggplot(aes(x = sector, y = n, fill = sector)) +
+  geom_col() +
+  facet_wrap(~ipo.year,  nrow = 5) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(x = "")
+  ) %>% 
+  ggplotly()
+```
+
+
+```{r}
+(company_ipo_sector %>% 
+  group_by(ipo.year) %>% 
+  filter(between(ipo.year, 2004, 2019) & !is.na(sector)) %>%
+  mutate(sector = str_remove(sector, "Consumer")) %>% 
+  count(sector) %>% 
+  ggplot(aes(x = sector, y = n, fill = sector, text = paste("sector:", sector, "<br> Number of IPOs:", n, sep = " "))) +
+  geom_col() +
+  facet_wrap(~ipo.year,  nrow = 5) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(x = "")
+ ) %>% 
+  ggplotly(tooltip = "text")
+```
+
+
+We can also split it out by sector rather than year:
+
+```{r}
+(
+company_ipo_sector %>% 
+  group_by(ipo.year) %>% 
+  filter(between(ipo.year, 2004, 2019) & !is.na(sector)) %>%
+  mutate(sector = str_remove(sector, "Consumer")) %>% 
+  count(sector) %>%  
+  ggplot(aes(x = ipo.year, y = n, fill = sector)) +
+  geom_col() +
+  facet_wrap(~sector) +
+  theme(axis.text.x = element_text(angle = 90))
+) %>% 
+  ggplotly()
+```
+
+
+
+
+## Potential question:
+
+Let's say you wanted to explore unsupervised machine learning in this dataset. You want to see if there are clusters of IPO valuations (using the `count` of IPOs within a year) by sector that are detectable without using the `sector` labels.
+
+1. What unsupervised learning approach would you use? Why?
+2. Interpret the results of your unsupervised learning model. How does this compare to the number of groups found by `sector`?
+3. Create a graphic showing the number of clusters of IPO counts that were selected using your clustering approach. One axis should be `count` and the other should be `year`. 
+4. Create another graphic showing the true `sectors`. How well did we do? Can we assess accuracy?
+
+## Check out this book
+
+On top of the data science library, check out these Python notebooks: 
+https://github.com/wesm/pydata-book
