@@ -1,12 +1,14 @@
  
 ---
 title: "DATA-0200 Lab 9 - RShiny, APIs and Making an App"
-author: "Kyle Monahan"
+author: "yijun yang"
 output:
   word_document:
     toc: yes
   pdf_document:
     toc: yes
+    
+    
   html_document:
     toc: yes
   always_allow_html: true
