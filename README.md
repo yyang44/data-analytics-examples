@@ -1,4 +1,4 @@
-# r shiny
+# data analytics examples: rshiny
 
 - The code in this repo is based the information from Tufts University Data lab. https://sites.tufts.edu/datalab/
 - The r shiny part is based the information from rstudio. http://shiny.rstudio.com/
